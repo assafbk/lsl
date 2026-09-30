@@ -1,0 +1,751 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta property="og:title" content="Local Support Learning">
+<meta property="og:description" content="Overcoming catastrophic forgetting by keeping weight updates local to their training data.">
+<meta property="og:image" content="fig/teaser.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%233f7fc4'/%3E%3Ccircle cx='16' cy='16' r='6' fill='%23fff'/%3E%3C/svg%3E">
+<title>Local Support Learning</title>
+<meta name="description" content="Local Support Learning: overcoming catastrophic forgetting by making each update local to its training distribution with a GMM-based gate.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;1,6..72,400&family=Comfortaa:wght@300..700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a short four-chapter argument. Each chapter = roman numeral + one-line claim + one or two sentences; the interactive toy classifier (Fig. 2) is the centerpiece.
+   Single light theme: white page, black text, Comfortaa for titles, sans-serif body text, maths in serif italic.
+   Color semantics: red = current finetuning data, blue = earlier data, violet = where the update changes outputs, green = where the gate opens. */
+:root {
+  --paper: #ffffff;
+  --surface: #ffffff;
+  --ink: #000000;
+  --ink-2: #222222;
+  --ink-3: #666666;
+  --rule: #e2e2e2;
+  --ft: #d8483f;
+  --pre: #3f7fc4;
+  --heat: #6d4fe0;
+  --open: #1f9a55;
+  --open-soft: rgba(31,154,85,.12);
+  --excess: rgba(216,72,63,.22);
+  --deficit: rgba(63,127,196,.22);
+  --deficit-c: #a88600;
+  --excess-c: #c8362d;
+  --plate: #ffffff;
+  --plate-edge: #e2e2e2;
+  --code-bg: #f4f4f4;
+  --f-display: "Comfortaa", "Varela Round", "Helvetica Neue", Arial, system-ui, sans-serif;
+  --f-body: "IBM Plex Sans", "Helvetica Neue", Arial, system-ui, sans-serif;
+  --f-mono: "IBM Plex Sans", "Helvetica Neue", Arial, system-ui, sans-serif;
+  --f-code: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --f-math: "Newsreader", "Times New Roman", Times, serif;
+  --col: 680px;
+  --wide: 1080px;
+  color-scheme: light;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body { background: var(--paper); color: var(--ink); font-family: var(--f-body); font-size: 17px; line-height: 1.65; padding-inline: 20px; padding-block: 0; -webkit-font-smoothing: antialiased; }
+a { color: inherit; text-decoration-color: var(--ink-3); text-underline-offset: 3px; }
+:focus-visible { outline: 2px solid var(--heat); outline-offset: 3px; border-radius: 4px; }
+.col { max-width: var(--col); margin-inline: auto; }
+.wide { max-width: var(--wide); margin-inline: auto; }
+p { margin: 0 0 18px; text-wrap: pretty; }
+.ft { color: var(--ft); font-weight: 500; }
+.pre { color: var(--pre); font-weight: 500; }
+.heat { color: var(--heat); font-weight: 500; }
+.gr { color: var(--open); font-weight: 500; }
+.m { font-family: var(--f-math); font-style: italic; font-size: 1.08em; white-space: nowrap; }
+.m-up .bb { font-style: normal; font-size: 1.15em; line-height: 1; }
+.m-up { font-family: var(--f-math), "STIX Two Math", "Cambria Math", "Segoe UI Symbol", "DejaVu Sans"; font-style: normal; font-size: 1.1em; white-space: nowrap; }
+.m sub, .m sup { font-style: normal; font-size: .66em; }
+
+/* Hero */
+header.hero { padding-block: 80px 20px; }
+.name { font-family: var(--f-display); font-variant-caps: small-caps; font-size: 22px; letter-spacing: .02em; color: var(--ink-2); margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; }
+.name small { font-family: var(--f-mono); font-variant-caps: normal; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
+h1 { font-family: var(--f-display); font-weight: 600; font-size: clamp(46px, 8.6vw, 104px); line-height: .98; letter-spacing: -.02em; margin: 18px 0 22px; text-wrap: balance; }
+.thesis { font-family: var(--f-display); font-weight: 600; font-size: clamp(24px, 3.2vw, 34px); line-height: 1.2; margin: 0 0 14px; letter-spacing: -.01em; }
+.thesis em { color: var(--heat); }
+.opening { font-family: var(--f-body); font-size: clamp(19px, 2.2vw, 23px); line-height: 1.55; font-weight: 400; color: var(--ink); max-width: 36em; margin: 0; }
+.opening.second { margin-bottom: 40px; }
+.opening b { font-weight: 600; }
+.byline { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: end; gap: 20px 40px; padding-bottom: 26px; margin-bottom: 30px; border-bottom: 1px solid var(--rule); }
+.authors { display: flex; flex-wrap: wrap; gap: 4px 22px; font-size: 17px; font-weight: 500; margin: 0; padding: 0; list-style: none; }
+.authors sup { font-weight: 400; color: var(--ink-3); font-size: 11px; margin-left: 1px; }
+.affil { color: var(--ink-3); font-size: 14px; margin: 6px 0 0; }
+.affil sup { font-size: 10px; }
+.links { display: flex; flex-wrap: wrap; gap: 10px; }
+.btn { display: inline-flex; align-items: center; gap: 8px; font-family: var(--f-mono); font-size: 13.5px; font-weight: 500; padding: 9px 16px; border-radius: 999px; text-decoration: none; border: 1px solid var(--ink); color: var(--paper); background: var(--ink); }
+.btn.ghost { background: transparent; color: var(--ink); }
+.btn.soon { background: transparent; color: var(--ink-3); border-color: var(--rule); border-style: dashed; cursor: default; }
+.btn svg { width: 15px; height: 15px; flex: none; }
+
+/* Chapters */
+.chapter { padding-block: 84px 8px; }
+.chap-head { display: grid; grid-template-columns: 76px minmax(0,1fr); gap: 0 8px; align-items: start; margin-bottom: 22px; }
+.numeral { font-family: var(--f-display); font-size: 52px; line-height: .95; color: var(--ink); font-weight: 300; }
+h2 { font-family: var(--f-display); font-weight: 600; font-size: clamp(32px, 4.8vw, 48px); line-height: 1.08; letter-spacing: -.012em; margin: 0; text-wrap: balance; }
+.chap-body { padding-left: 84px; }
+.chap-body p { font-size: 18px; }
+h3 { font-family: var(--f-display); font-weight: 600; font-size: 23px; margin: 44px 0 0; }
+.eq { font-family: var(--f-math); font-size: 23px; text-align: center; padding: 18px 12px; margin: 6px 0 20px; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); overflow-x: auto; white-space: nowrap; }
+.eq i { font-style: italic; }
+.eq sub, .eq sup { font-size: .62em; }
+.eq-stack { display: grid; gap: 14px; justify-items: center; }
+.frac { display: inline-flex; flex-direction: column; vertical-align: middle; text-align: center; font-size: .82em; line-height: 1.15; margin: 0 2px; }
+.frac > span:first-child { border-bottom: 1px solid currentColor; padding: 0 3px 1px; }
+.frac > span:last-child { padding-top: 1px; }
+.frac sup { font-size: .6em; }
+.ip { padding: 1px 6px; border-radius: 5px; background: color-mix(in srgb, var(--heat) 14%, transparent); box-shadow: inset 0 -2px 0 var(--heat); }
+.ip-inline { font-family: var(--f-math); font-style: italic; padding: 0 4px; border-radius: 4px; background: color-mix(in srgb, var(--heat) 14%, transparent); white-space: nowrap; }
+.ip-inline sup { font-style: normal; font-size: .66em; }
+.where { margin-top: -4px; }
+.where i { font-family: var(--f-math); font-size: 1.08em; }
+
+/* Figures */
+figure { margin: 34px auto 10px; }
+.plate { background: var(--plate); border: 1px solid var(--plate-edge); border-radius: 12px; padding: 18px; display: block; width: 100%; cursor: zoom-in; appearance: none; font: inherit; }
+.plate img { display: block; margin-inline: auto; width: 100%; height: auto; }
+figcaption { font-size: 14.5px; color: var(--ink-2); line-height: 1.55; margin: 12px auto 0; max-width: var(--col); }
+figcaption b { color: var(--ink); font-weight: 600; }
+.fig-no { font-family: var(--f-mono); font-size: 12px; color: var(--ink-3); margin-right: 8px; letter-spacing: .04em; }
+.pair { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: 14px; align-items: stretch; }
+.pair .plate { display: flex; align-items: center; }
+.side { display: grid; grid-template-columns: minmax(0,1fr) minmax(0, 320px); gap: 18px 36px; align-items: center; }
+.side figure { margin: 0; }
+
+/* Theory */
+.theory-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 20px 36px; align-items: center; margin: 26px auto 8px; max-width: 900px; }
+.theory-grid svg { width: 100%; height: auto; display: block; }
+.defs { display: grid; gap: 14px; }
+.def { display: grid; grid-template-columns: 14px minmax(0,1fr); gap: 12px; font-size: 16px; color: var(--ink-2); line-height: 1.5; }
+.def .sw { margin-top: 5px; width: 14px; height: 14px; border-radius: 3px; }
+.def b { color: var(--ink); font-weight: 600; }
+.how { margin: 26px 0 0; padding: 0; list-style: none; counter-reset: h; display: grid; gap: 0; }
+.how li { counter-increment: h; display: grid; grid-template-columns: 34px minmax(0,1fr); gap: 4px 10px; padding: 14px 0; border-top: 1px solid var(--rule); font-size: 17px; line-height: 1.55; }
+.how li:last-child { border-bottom: 1px solid var(--rule); }
+.how li::before { content: counter(h); font-family: var(--f-display); font-weight: 700; font-size: 20px; line-height: 1.3; }
+.how li b { font-weight: 600; }
+.fn-ref a { text-decoration: none; font-size: .75em; padding-left: 1px; color: var(--ink-2); }
+.footnote { font-size: 14px !important; color: var(--ink-3); border-top: 1px solid var(--rule); padding-top: 10px; margin-top: 24px; }
+.footnote a { text-decoration: none; color: var(--ink-3); }
+.t-def { color: var(--deficit-c) !important; }
+.t-exc { color: var(--excess-c) !important; }
+.sw-hatch { background: repeating-linear-gradient(45deg, rgba(201,160,0,.85) 0 2.6px, #fff 2.6px 5px); border: 1px solid rgba(201,160,0,.9); }
+.sw-excess { background: repeating-linear-gradient(-45deg, rgba(216,72,63,.6) 0 2.6px, #fff 2.6px 5px); border: 1px solid rgba(216,72,63,.7); }
+.sw-ok { background: #eeeeee; border: 1px solid #bbb; }
+.def-small { font-size: 14.5px !important; color: var(--ink-3); }
+.def-pts { grid-template-columns: 14px minmax(0,1fr); }
+.def-pts .pts { display: grid; gap: 3px; margin-top: 3px; }
+.def-pts .pts i { width: 9px; height: 9px; border-radius: 50%; display: block; }
+
+/* Stats */
+.stats { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); margin: 30px 0 12px; border-top: 1px solid var(--ink); }
+.stat { padding: 18px 18px 6px 0; }
+.stat + .stat { padding-left: 18px; border-left: 1px solid var(--rule); }
+.stat .v { font-family: var(--f-display); font-size: clamp(34px, 4.6vw, 48px); line-height: 1; font-weight: 500; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+.stat .v small { font-size: .45em; margin-left: 3px; color: var(--ink-3); letter-spacing: 0; }
+.stat .l { font-size: 14px; color: var(--ink-2); margin-top: 10px; line-height: 1.45; }
+
+.cite { position: relative; }
+.cite pre { background: var(--code-bg); border-radius: 10px; padding: 20px 22px; overflow-x: auto; margin: 0; font-family: var(--f-code); font-size: 13.5px; line-height: 1.7; color: var(--ink); }
+.copy { position: absolute; top: 12px; right: 12px; font-family: var(--f-mono); font-size: 12px; font-weight: 500; background: var(--surface); color: var(--ink); border: 1px solid var(--rule); border-radius: 999px; padding: 5px 12px; cursor: pointer; }
+.kicker { font-family: var(--f-mono); font-size: 12.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 12px; }
+footer { padding-block: 72px 56px; color: var(--ink-3); font-size: 13.5px; }
+footer .col { border-top: 1px solid var(--rule); padding-top: 22px; display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+
+dialog#zoom { border: 0; padding: 0; background: transparent; max-width: 96vw; max-height: 94vh; }
+dialog#zoom::backdrop { background: rgba(10,12,22,.82); }
+dialog#zoom .inner { background: #fff; border-radius: 10px; padding: 14px; }
+dialog#zoom img { display: block; max-width: calc(96vw - 28px); max-height: calc(94vh - 28px); width: auto; height: auto; }
+dialog#zoom button { position: fixed; top: 14px; right: 18px; font-family: var(--f-mono); font-size: 13px; color: #fff; background: rgba(0,0,0,.4); border: 1px solid rgba(255,255,255,.35); border-radius: 999px; padding: 6px 14px; cursor: pointer; }
+
+@media (max-width: 760px) {
+  .tradeoff { grid-column: 1 / -1; max-width: 380px; }
+}
+@media (max-width: 860px) {
+  .theory-grid, .pair, .side { grid-template-columns: minmax(0,1fr); }
+}
+@media (max-width: 760px) {
+  body { font-size: 16px; padding-inline: 16px; }
+  header.hero { padding-block: 48px 8px; }
+  .chapter { padding-block: 60px 4px; }
+  .chap-head { grid-template-columns: 48px minmax(0,1fr); }
+  .numeral { font-size: 40px; }
+  .chap-body { padding-left: 0; }
+  .chap-body p { font-size: 17px; }
+  .eq { font-size: 18px; padding-inline: 0; }
+
+  .stats { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .stat:nth-child(3) { padding-left: 0; border-left: 0; }
+  .stat:nth-child(n+3) { border-top: 1px solid var(--rule); }
+  .plate { padding: 10px; }
+}
+
+/* Interactive toy classifier (Fig. 2) */
+:root { --k0: #2f5cad; --k1: #4b8be0; --k2: #7db5f0; --k3: #b0d2f6; --k4: #f08a4f; --k5: #c8283f; }
+.toy-card { background: var(--surface); border: 1px solid var(--rule); border-radius: 14px; padding: 18px 20px; }
+.toy-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px 20px; }
+.toy-title { font-family: var(--f-display); font-size: 20px; font-weight: 600; margin: 0; }
+.toy-btns { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.tb-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.tb { font-family: var(--f-body); font-size: 14.5px; font-weight: 600; display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px; border-radius: 999px; border: 1.5px solid var(--ink); background: transparent; color: var(--ink); cursor: pointer; transition: transform .12s ease, background .15s, color .15s; }
+.tb:has(.n) { padding-left: 8px; }
+.tb .n { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--ink); color: var(--paper); font-family: var(--f-mono); font-size: 12px; }
+.tb:hover:not(:disabled) { transform: translateY(-1px); }
+.tb:disabled { opacity: .4; cursor: progress; }
+.tb[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+.tb[aria-pressed="true"] .n { background: var(--paper); color: var(--ink); }
+.tb.lsl { border-color: var(--open); color: var(--open); }
+.tb.lsl .n { background: var(--open); color: #fff; }
+.tb.lsl[aria-pressed="true"] { background: var(--open); color: #fff; }
+.tb.lsl[aria-pressed="true"] .n { background: #fff; color: var(--open); }
+.tb.next:not(:disabled) { animation: tb-pulse 1.8s ease-out infinite; }
+.tb.lsl.next:not(:disabled) { animation-name: tb-pulse-g; }
+@keyframes tb-pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ink) 35%, transparent); } 100% { box-shadow: 0 0 0 10px transparent; } }
+@keyframes tb-pulse-g { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--open) 45%, transparent); } 100% { box-shadow: 0 0 0 10px transparent; } }
+@media (prefers-reduced-motion: reduce) { .tb.next { animation: none !important; } }
+.toy-grid { display: grid; grid-template-columns: minmax(0,1fr) 290px; gap: 16px 22px; margin-top: 16px; align-items: start; }
+#toy { width: 100%; height: clamp(280px, 40vw, 440px); display: block; border-radius: 8px; }
+.toy-stage { font-family: var(--f-mono); font-size: 13px; font-weight: 500; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-2); margin: 4px 0 12px; min-height: 2.6em; }
+.toy-acc .v { font-size: 26px !important; }
+.toy-acc { display: grid; gap: 10px; border-top: 1px solid var(--rule); padding-top: 12px; }
+.toy-acc div { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.toy-acc .k { font-size: 14px; color: var(--ink-2); }
+.toy-acc .v { font-family: var(--f-display); font-weight: 500; font-size: 30px; line-height: 1; font-variant-numeric: tabular-nums; }
+.toy-acc .v.bad { color: var(--ft); }
+.toy-acc .v.good { color: var(--open); }
+.toy-canvas { position: relative; min-width: 0; }
+.toy-prog { margin-top: 2px; }
+.toy-prog-title { font-family: var(--f-display); font-size: 17px; font-weight: 600; margin: 0 0 10px; }
+#toy-chart { width: 100%; height: auto; display: block; overflow: visible; }
+.toy-prog-key { display: grid; gap: 6px; font-size: 15px; color: var(--ink); margin-top: 12px; }
+.toy-prog-key span { display: inline-flex; align-items: center; gap: 10px; }
+.toy-prog-key i { width: 26px; height: 4px; border-radius: 2px; display: inline-block; }
+.toy-steps { font-size: 13px; color: var(--ink-3); margin: 10px 0 0; font-variant-numeric: tabular-nums; }
+.toy-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 28px; margin-top: 10px; font-size: 13.5px; color: var(--ink-2); transition: opacity .2s; }
+.toy-legend .grp { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
+.toy-legend p { margin: 0 2px 0 0; font-family: var(--f-mono); font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--ink); }
+.toy-legend .ft-grp { }
+.toy-legend .ft-grp.hide { opacity: .25; }
+.toy-legend .grp.faded { opacity: .4; }   /* data not used for training in the current phase */
+.toy-plot { position: relative; }
+.toy-train { position: absolute; top: 8px; left: 8px; z-index: 1; display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; background: var(--ink); color: var(--paper); font-size: 13px; font-weight: 600; pointer-events: none; }
+.toy-train i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; box-shadow: 0 0 0 1.5px var(--paper); }
+.toy-legend span { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.toy-legend i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+@media (max-width: 900px) {
+  .toy-grid { grid-template-columns: minmax(0,1fr) 240px; gap: 12px 16px; }
+}
+@media (max-width: 560px) {
+  .toy-grid { grid-template-columns: minmax(0,1fr); }
+}
+@media (max-width: 760px) {
+  .toy-card { padding: 12px; }
+  #toy { height: 300px; }
+}
+</style>
+<style>
+/* Simple project-page layout: one centered column, section titles centered. */
+.page { max-width: 860px; margin-inline: auto; }
+header.top { text-align: center; padding-block: 64px 8px; }
+header.top h1 { font-size: clamp(40px, 6.4vw, 64px); margin: 0 0 22px; line-height: 1.05; }
+header.top .authors { justify-content: center; font-size: 18px; }
+header.top .affil { margin-top: 8px; font-size: 15px; }
+header.top .links { justify-content: center; margin-top: 22px; }
+header.top .intro { text-align: left; font-size: 15.5px; line-height: 1.6; color: var(--ink-2); max-width: 720px; margin: 22px auto 0; }
+section.s { padding-top: 56px; }
+section.s > h2 { text-align: center; font-size: clamp(26px, 3.4vw, 32px); margin: 0 0 20px; }
+section.s p { font-size: 17px; }
+.teaser { margin: 34px auto 0; }
+.teaser .plate { cursor: zoom-in; }
+.abstract p { text-align: justify; hyphens: auto; }
+.eq { font-size: 21px; }
+figure.f { margin: 28px auto 8px; }
+figure.f figcaption, .teaser figcaption { max-width: none; }
+.toy { margin-top: 26px; }
+#results h3 { font-size: 21px; margin: 40px 0 10px; }
+.more { margin: 0; padding-left: 22px; display: grid; gap: 8px; font-size: 17px; line-height: 1.6; }
+.more b { font-weight: 600; }
+.more-paper { text-align: center; font-size: 17px; margin: 48px 0 0; color: var(--ink-2); }
+.theory-grid { margin-top: 18px; }
+@media (max-width: 760px) {
+  header.top { padding-block: 40px 0; }
+  section.s { padding-top: 44px; }
+  .eq { font-size: 18px; }
+}
+</style>
+<style>[hidden]{display:none!important} img{max-width:100%}</style>
+</head>
+<body>
+<div class="page">
+  <header class="top">
+    <h1>Local Support Learning</h1>
+    <ul class="authors">
+      <li>Assaf Ben-Kish<sup>1†</sup></li>
+      <li>Akarsh Kumar<sup>2</sup></li>
+      <li>James Glass<sup>2</sup></li>
+      <li>Raja Giryes<sup>1</sup></li>
+    </ul>
+    <p class="affil"><sup>1</sup>Tel Aviv University &nbsp; <sup>2</sup>MIT CSAIL<br><sup>†</sup>Work done while visiting the Spoken Language Systems group at MIT CSAIL</p>
+    <nav class="links" aria-label="Paper links">
+      <a class="btn" href="lsl_paper.pdf" target="_blank" rel="noopener"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 1.5h5.5L13 5v9.5H4z"/><path d="M9.5 1.5V5H13"/><path d="M6 8.5h5M6 11h5"/></svg>Paper</a>
+      <!-- Replace with the arXiv URL, then change class to "btn ghost" -->
+      <span class="btn soon" title="Link coming soon">arXiv · soon</span>
+            <a class="btn ghost" href="https://github.com/assafbk/local_support_learning" target="_blank" rel="noopener"><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>Code</a>
+      <a class="btn ghost" href="#citation">BibTeX</a>
+    </nav>
+    <p class="intro">Modern neural networks learn in phases: large-scale pretraining followed by smaller finetuning phases. Catastrophic forgetting hurts this process, as each new phase can overwrite capabilities acquired in previous ones. We propose Local Support Learning (LSL), which keeps weight updates local to their training data, minimizing interference with prior capabilities and overcoming forgetting in LLMs of up to 7B parameters.</p>
+  </header>
+
+  <figure class="teaser">
+    <button class="plate" type="button" data-zoom><img src="fig/teaser.png" alt="Left: frozen weight W in parallel with a weight adapter behind a gate. Right: a GMM gate, with narrow Φpos peaks over a wide Φneg and the decision boundary under the peaks." width="1278" height="452"></button>
+    <figcaption><span class="fig-no">FIG. 1</span><b>Avoiding catastrophic forgetting with Local Support Learning.</b> Left: A gating function enables the weight adapter only on input activations from its training distribution. Interestingly, conventional MLP classifiers are not well suited for this task. Instead, we propose a GMM-based gate that tends to stay closed on prior data it has never encountered. Right: a 1D illustration of the GMM-based gate. <i>Φ</i><sub>pos</sub> (orange) captures the finetuning data, while the wider <i>Φ</i><sub>neg</sub> (blue) dominates elsewhere, so data outside the current distribution is routed only to the pretrained weights.</figcaption>
+  </figure>
+
+  <section class="s abstract" id="abstract">
+    <h2>Abstract</h2>
+    <p>We explore catastrophic forgetting in the context of large pre-trained models. By considering forgetting as a geometric problem in the input space of each weight matrix, we uncover a natural retention objective under which updates produced by gradient-based optimizers are suboptimal. Following this observation, we propose Local Support Learning (LSL), a general-purpose framework that augments gradient-based training for retention of prior capabilities without access to prior data. During a new learning phase, LSL pairs two components with distinct roles: a standard weight adapter, trained as usual to minimize the loss, and a gating function that enables the adapter only on input activations from its own training distribution, making the update local to that distribution. The key challenge is that this gate must route data from all learning phases while training only on data from the current one. We address this with a gate based on a Gaussian Mixture Model (GMM), whose likelihood decays rapidly away from its training data, giving it a natural tendency to stay closed on data from prior phases. We show that this post-training approach can resolve forgetting in LLMs of up to 7 billion parameters, retaining both pretrained and finetuned capabilities across multiple training phases, while being efficient in memory and compute, robust to hyperparameter choice, and showing scaling potential.</p>
+  </section>
+
+  <section class="s" id="how">
+    <h2>How does it work?</h2>
+    <p>In each new learning phase, LSL pairs a standard weight adapter (e.g. LoRA) and a GMM-based gate. The weight adapter is trained with gradient descent as usual. The gate fits two Gaussian mixtures: <span class="m-up">Φ<sub>pos</sub></span> on the current phase’s input activations, and a wider <span class="m-up">Φ<sub>neg</sub></span>, fit once on about one million generic pretraining tokens. A token passes through the adapter only where it is more likely under the current phase:</p>
+    <div class="eq">Φ<sub>pos</sub>(<i>x</i>) − Φ<sub>neg</sub>(<i>x</i>) &gt; 0</div>
+    <p>For any other token, the weight matrix behaves exactly as before the current training phase.</p>
+  </section>
+
+  <section class="s" id="results">
+    <h2>Results</h2>
+    <p>We finetune Qwen2.5-7B-Instruct on diverse tasks: chemistry, translation to a low-resource language (English→Igbo) and cybersecurity, and measure retention of pretraining capabilities such as math, coding, and instruction following (<a href="#fig-posttrain">Fig. 2</a>).<br>LSL achieves almost optimal retention while also exhibiting strong learning abilities on the new task.</p>
+    <figure class="f" id="fig-posttrain">
+      <button class="plate" type="button" data-zoom><img src="fig/posttrain.png" alt="Three scatter plots of pretraining-task score against new-task score; LSL sits near the base model's retention line while matching the best new-task score; LoRA, OP-LoRA and LwF fall below" width="1653" height="446" loading="lazy"></button>
+      <figcaption><span class="fig-no">FIG. 2</span><b>Post-training with LSL.</b> We evaluate forgetting on a Qwen2.5-7B-Instruct model for three diverse downstream tasks. The <i>x</i>-axis measures the new task’s performance and the <i>y</i>-axis measures capability retention, the average score across three pretraining benchmarks. The upper-right corner reflects stronger performance. LSL learns the downstream task while achieving near-optimal retention across all settings.</figcaption>
+    </figure>
+    <p style="margin-top: 32px">Next, we finetune on all three tasks sequentially (<a href="#fig-multiphase">Fig. 3</a>). LSL retains both its pretrained capabilities and the skills gained in earlier finetuning phases, while the baseline consistently forgets.</p>
+    <figure class="f" id="fig-multiphase" style="max-width: 720px">
+      <button class="plate" type="button" data-zoom><img src="fig/multiphase.png" alt="Four line plots tracking pretraining tasks and finetune tasks 1–3 across sequential phases; LSL (blue) stays flat, the baseline (grey) declines" width="1485" height="922" loading="lazy"></button>
+      <figcaption><span class="fig-no">FIG. 3</span><b>Post-training with multiple phases.</b> Each plot tracks the evaluation score of one task throughout training; the phase whose training data matches the evaluated task is marked with a dashed line. The training order is (1) Igbo translation, (2) Chemistry, (3) Cybersecurity. In the top-left plot, LSL retains pretrained capabilities throughout, while the baseline drops by 44% already after one phase. On the three finetuning benchmarks, LSL retains its gains after each task’s phase ends, whereas the baseline’s performance declines steadily once the peak is reached.</figcaption>
+    </figure>
+    <h3>Additional results</h3>
+    <ul class="more">
+      <li><b>LSL improves with scale.</b> Retention of pretrained capabilities increases from 88% at 1.5B parameters to 97% at 3B and 99% at 7B.</li>
+      <li><b>LSL decouples learning hyperparameters from forgetting.</b> Learning rate, batch size, and adapter rank no longer trade off with retention, allowing the model to reach peak performance.</li>
+      <li><b>LSL is efficient.</b> On a 7B-parameter model, LSL adds only 6.9 MB of memory per phase on top of a standard adapter and about 21% inference latency over a LoRA baseline (86 ms per forward pass). It is also highly parallelizable.</li>
+    </ul>
+  </section>
+
+  <section class="s" id="global">
+    <h2>Mechanistic motivation</h2>
+    <p>Let <span class="m">v</span> = <span class="m">Wx</span> be the input–output mapping of a single weight matrix. We study how a new gradient update affects this mapping, given a new training sample <span class="m">x<sup>(s)</sup></span>. Consider a simple gradient-based update Δ<i>W</i>:</p>
+    <div class="eq">Δ<i>W</i> = −<i>α</i> · <span class="frac"><span>∂𝓛</span><span>∂<i>v</i></span></span> · <i>x</i><sup>(s)⊤</sup></div>
+    <p class="where">where <i>α</i> is the learning rate. Δ<i>W</i> is itself a matrix: applied to any input <i>x</i>, it changes the output by Δ<i>v</i> = Δ<i>W x</i>.</p>
+    <p>Notice that the update is <em>global</em>: Δ<i>W</i> affects any input <i>x</i> that is not orthogonal to it, including inputs from previous learning phases. This is demonstrated below during the “Finetune with GD” phase, where the classification of prior classes (blue) changes when training on new data (red). To prevent this, we constrain the update to act only on the support of the current training distribution, making it <em>local</em> to that region.</p>
+    <p>LSL realizes this with a gate that opens only on the current phase’s data. As shown in the “Finetune with LSL” phase (<a href="#toy-fig">Fig. 4</a>), the new classes are learned while the classification of prior classes stays intact.</p>
+  </section>
+</div>
+
+<figure class="wide toy" id="toy-fig" aria-labelledby="toy-title">
+    <div class="toy-card">
+      <div class="toy-head">
+        <p class="toy-title" id="toy-title">Reproducing forgetting in a two-phase training run</p>
+        <div class="toy-btns" role="group" aria-label="Steps">
+          <button type="button" class="tb" id="tb-data" aria-pressed="true">Data</button>
+          <button type="button" class="tb next" id="tb-gd" aria-pressed="false">Pretrain → Finetune with GD</button>
+          <button type="button" class="tb lsl" id="tb-lsl" aria-pressed="false">Pretrain → Finetune with LSL</button>
+        </div>
+      </div>
+      <div class="toy-grid">
+        <div class="toy-canvas">
+        <div class="toy-plot">
+          <div class="toy-train" id="toy-train" hidden aria-live="polite"></div>
+          <canvas id="toy" role="img" aria-label="Two-dimensional toy classification problem with four pretraining classes in blue and two finetuning classes in red. Background colours show the classifier's decision regions."></canvas>
+        </div>
+          <div class="toy-legend" aria-label="Legend">
+            <div class="grp" id="lg-pre"><p>Pretraining</p>
+              <span><i style="background:var(--k0)"></i>Class 0</span><span><i style="background:var(--k1)"></i>Class 1</span><span><i style="background:var(--k2)"></i>Class 2</span><span><i style="background:var(--k3)"></i>Class 3</span></div>
+            <div class="grp ft-grp" id="lg-ft"><p>Finetuning</p>
+              <span><i style="background:var(--k4)"></i>Class 4</span><span><i style="background:var(--k5)"></i>Class 5</span></div>
+          </div>
+        </div>
+        <div class="toy-side">
+          <p class="toy-stage" id="toy-stage" hidden>Data</p>
+          <div class="toy-acc" hidden>
+            <div><span class="k">Pretraining (0–3)</span><span class="v" id="acc-pre">–</span></div>
+            <div><span class="k">Finetuning (4–5)</span><span class="v" id="acc-ft">–</span></div>
+          </div>
+          <div class="toy-prog">
+            <p class="toy-prog-title">Accuracy</p>
+            <svg id="toy-chart" viewBox="0 0 280 228" role="img" aria-label="Accuracy on pretraining and finetuning classes over training steps"></svg>
+            <div class="toy-prog-key"><span><i style="background:var(--k1)"></i>Pretraining classes (0–3)</span><span><i style="background:var(--k5)"></i>Finetuning classes (4–5)</span></div>
+            <p class="toy-steps" id="toy-step">0 / 1200 steps</p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <figcaption><span class="fig-no">FIG. 4</span><b>Interactive toy example.</b> A linear classifier <i>v</i> = <i>Wx</i>, trained by gradient descent. Background colors show the classifier’s decision regions, and their borders are the decision boundaries. Pretrain on the blue classes (0–3), then finetune only on the red ones (4–5). Finetuning with GD redraws the boundaries everywhere and forgets old classes; with LSL, the update is applied to a region that is local to the current training distribution, avoiding interference with previously learned data.</figcaption>
+  </figure>
+
+<div class="page">
+  <section class="s" id="theory">
+    <h2>Theoretical motivation</h2>
+    <p>As before, we consider a single weight matrix. Let <span class="m">A<sup>*</sup></span> denote the support of the current data. We frame retention as a minimax problem: since nothing is known about prior data, an adversarial pretraining sample could lie anywhere outside <span class="m">A<sup>*</sup></span>. Under this framing, the ideal gate opens exactly on <span class="m">A<sup>*</sup></span>.<sup class="fn-ref"><a href="#fn-overlap" id="fnref-overlap">1</a></sup> A learned gate instead opens on some region <span class="m">Â</span>. We show that against the worst-case test distribution, its error decomposes into two terms: the <b class="t-def">deficit</b>, the part of <span class="m">A<sup>*</sup></span> the gate rejects, which limits learning, and the <b class="t-exc">excess</b>, the region outside <span class="m">A<sup>*</sup></span> it accepts, which causes forgetting.</p>
+  </section>
+</div>
+<div class="wide">
+  <div class="theory-grid">
+      <svg viewBox="0 0 520 280" role="img" aria-label="The support A-star and a gate's accept set A-hat. The part of the support the gate rejects is the deficit; the part of the gate outside the support is the excess, where previous-phase inputs fall.">
+        <defs>
+          <path id="supp" d="M70,150 C66,92 120,58 180,62 C236,66 268,98 262,146 C256,198 204,226 146,220 C98,215 74,190 70,150Z"/>
+          <ellipse id="acc" cx="270" cy="142" rx="168" ry="92"/>
+          <clipPath id="clip-acc"><use href="#acc"/></clipPath>
+          <pattern id="hatch" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(-45)">
+            <rect width="7" height="7" fill="#ffffff"/>
+            <rect width="2.6" height="7" fill="#c9a000" fill-opacity=".85"/>
+          </pattern>
+          <pattern id="dots" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+            <rect width="7" height="7" fill="#ffffff"/>
+            <rect width="2.6" height="7" fill="#d8483f" fill-opacity=".6"/>
+          </pattern>
+        </defs>
+        <rect x="0" y="0" width="520" height="280" rx="10" fill="#eeeeee"/>
+        <use href="#acc" fill="url(#dots)"/>
+        <use href="#supp" fill="url(#hatch)"/>
+        <use href="#supp" clip-path="url(#clip-acc)" fill="#eeeeee"/>
+        <use href="#supp" style="fill: none; stroke: var(--open); stroke-width: 2.5"/>
+        <use href="#acc" style="fill: none; stroke: var(--heat); stroke-width: 2.5"/>
+        <g style="fill: var(--ft); stroke: #fff; stroke-width: 1"><circle cx="86" cy="152" r="5.5"/><circle cx="100" cy="120" r="5.5"/><circle cx="112" cy="196" r="5.5"/><circle cx="150" cy="120" r="5.5"/><circle cx="178" cy="98" r="5.5"/><circle cx="205" cy="130" r="5.5"/><circle cx="130" cy="165" r="5.5"/><circle cx="172" cy="178" r="5.5"/><circle cx="222" cy="170" r="5.5"/><circle cx="110" cy="130" r="5.5"/><circle cx="195" cy="200" r="5.5"/><circle cx="235" cy="118" r="5.5"/></g>
+        <g style="fill: var(--pre); stroke: #fff; stroke-width: 1"><circle cx="352" cy="120" r="5.5"/><circle cx="372" cy="146" r="5.5"/><circle cx="340" cy="162" r="5.5"/><circle cx="388" cy="118" r="5.5"/><circle cx="362" cy="182" r="5.5"/><circle cx="478" cy="168" r="5.5"/><circle cx="494" cy="190" r="5.5"/><circle cx="244" cy="262" r="5.5"/><circle cx="266" cy="250" r="5.5"/></g>
+        <g style="font-family: var(--f-body); font-size: 16px; font-weight: 600; fill: var(--ink)">
+          <text x="160" y="46" text-anchor="middle" style="fill: var(--open)">A*</text>
+          <text x="396" y="68" text-anchor="start" style="fill: var(--heat)">Â (gate opens)</text>
+          <text x="58" y="78" text-anchor="end" style="fill: var(--deficit-c)">deficit</text>
+          <text x="468" y="262" text-anchor="middle" style="fill: var(--excess-c)">excess</text>
+        </g>
+        <line x1="60" y1="84" x2="88" y2="126" style="stroke: var(--ink-3); stroke-width: 1"/>
+        <g class="pts-key">
+          <rect x="8" y="228" width="160" height="44" rx="6" fill="#ffffff" stroke="#dddddd"/>
+          <circle cx="21" cy="241" r="5" style="fill: var(--ft)"/>
+          <text x="32" y="245.5" style="font: 12.5px var(--f-body); fill: var(--ink)">current-phase data</text>
+          <circle cx="21" cy="259" r="5" style="fill: var(--pre)"/>
+          <text x="32" y="263.5" style="font: 12.5px var(--f-body); fill: var(--ink)">prior-phase data</text>
+        </g>
+        <line x1="452" y1="248" x2="392" y2="198" style="stroke: var(--ink-3); stroke-width: 1"/>
+      </svg>
+      <div class="defs">
+        <div class="def"><i class="sw sw-hatch"></i><div><b class="t-def">Deficit</b>: the part of the current data’s support on which the gate stays closed. The gate is trained on this data, so its training objective optimizes this term directly, and we do not discuss it further.</div></div>
+        <div class="def"><i class="sw sw-excess"></i><div><b class="t-exc">Excess</b>: all points outside the current data’s support on which the gate erroneously stays open. This term quantifies forgetting, because inputs from previous phases that fall here interact with the update and may therefore be altered. Crucially, since this region is off-data by definition, the gate’s training objective is blind to it, so this error component cannot be directly optimized.</div></div>
+        <div class="def def-small"><i class="sw sw-ok"></i><div><b>No error</b> (grey): the gate correctly opens inside <span class="m">A<sup>*</sup></span> and correctly stays closed outside it.</div></div>
+      </div>
+    </div>
+</div>
+<div class="page">
+  <section>
+    <p style="margin-top: 20px">While no objective on the current data alone can act on the excess, we show that other factors, such as the hypothesis class, can control it under explicit conditions. Specifically, a gate based on a Gaussian Mixture Model (GMM) has a likelihood that decays rapidly away from its training data, giving it a natural tendency to stay closed on data from prior phases. We study several hypothesis families, and find that in general, consistent density estimators can recover optimal gates, at costs we analyze.</p>
+    <p class="footnote" id="fn-overlap"><sup>1</sup> If prior-phase data also lies inside <span class="m">A<sup>*</sup></span>, that region is being optimized by the current phase, so it is valid for the gate to be open there. <a href="#fnref-overlap" aria-label="Back to text">↩</a></p>
+  </section>
+
+  <p class="more-paper">For full details and more experiments, see <a href="lsl_paper.pdf" target="_blank" rel="noopener">the paper</a>!</p>
+
+  <section class="s" id="citation">
+    <h2>BibTeX</h2>
+    <div class="cite">
+      <button class="copy" type="button" id="copy-bib">Copy</button>
+<pre id="bib">@article{benkish2026lsl,
+  title   = {Local Support Learning},
+  author  = {Ben-Kish, Assaf and Kumar, Akarsh and
+             Glass, James and Giryes, Raja},
+  journal = {arXiv preprint},
+  year    = {2026}
+}</pre>
+    </div>
+  </section>
+</div>
+
+<footer>
+  <div class="col">
+    <span>Local Support Learning · Tel Aviv University &amp; MIT CSAIL</span>
+    <a href="#abstract">Back to top</a>
+  </div>
+</footer>
+
+<dialog id="zoom" aria-label="Enlarged figure">
+  <button type="button" id="zoom-close">Close</button>
+  <div class="inner"><img id="zoom-img" alt=""></div>
+</dialog>
+
+<script>
+(() => {
+  /* ---------- Interactive toy classifier (Fig. 2) ---------- */
+  (() => {
+    const cv = document.getElementById('toy'); if (!cv) return;
+    const ctx = cv.getContext('2d');
+    const off = document.createElement('canvas'), octx = off.getContext('2d');
+    const bData = document.getElementById('tb-data'), bGd = document.getElementById('tb-gd'), bLsl = document.getElementById('tb-lsl');
+    const chart = document.getElementById('toy-chart'), stepEl = document.getElementById('toy-step');
+    const stageEl = document.getElementById('toy-stage'), accPre = document.getElementById('acc-pre'), accFt = document.getElementById('acc-ft');
+    const K = 6, R = 0.14, LR = 2.0, STEPS = 600, WARMUP = 300;
+    const lrAt = n => LR * Math.min(1, (n + 1) / WARMUP);   // linear warmup keeps the early dynamics visible
+    // steps per animation frame, tuned per phase so the part where things change gets the screen time
+    // Wall-clock pacing: each segment = [step reached at its end, seconds it takes]. Independent of frame rate.
+    const PACE = {
+      pre: [[60, 0.8], [600, 1.0]],                 // boundaries form in the first steps: ~1.8 s
+      ft:  [[120, 1.0], [400, 2.2], [600, 0.8]],    // new task learned, then forgetting builds: ~4 s
+      lsl: [[62, 0.4], [115, 3.6], [600, 0.9]]      // gated regions fill between steps ~65 and ~110: give that window ~3.5 s (total ~4.9 s)
+    };
+    const CENT = [[-0.32, 0.62], [0.22, 0.66], [0.58, 0.06], [-0.22, -0.58], [-0.7, 0.04], [0.34, -0.52]];
+    let sd = 5;
+    const rnd = () => (sd = (sd * 16807) % 2147483647) / 2147483647;
+    const gs = () => { let u = 0, v = 0; while (!u) u = rnd(); while (!v) v = rnd(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
+    const data = [];
+    CENT.forEach((c, k) => { for (let i = 0; i < 25; i++) data.push({ x: [c[0] + gs() * .06, c[1] + gs() * .06], y: k }); });
+    const pre = data.filter(d => d.y < 4), ft = data.filter(d => d.y >= 4);
+    const zeros = () => Array.from({ length: K }, () => [0, 0]);
+    const W_INIT = Array.from({ length: K }, () => [gs() * .01, gs() * .01]);   // same starting weights for every run
+    const init = () => W_INIT.map(w => w.slice());
+
+    const S = { phase: 'data', kind: null, W: null, W0: null, dW: null, anim: 0, hist: [] };
+    const inBall = x => ft.some(f => (f.x[0] - x[0]) ** 2 + (f.x[1] - x[1]) ** 2 < R * R);
+    function eff(x) {
+      if (S.phase.startsWith('lsl') && S.dW && inBall(x)) return S.W.map((w, k) => [w[0] + S.dW[k][0], w[1] + S.dW[k][1]]);
+      return S.W;
+    }
+    function predict(x) {
+      const M = eff(x); let best = 0, bv = -Infinity;
+      for (let k = 0; k < K; k++) { const v = M[k][0] * x[0] + M[k][1] * x[1]; if (v > bv) { bv = v; best = k; } }
+      return best;
+    }
+    function step(set, trainDW, lr) {
+      const G = zeros();
+      for (const d of set) {
+        const M = trainDW ? S.W.map((w, k) => [w[0] + S.dW[k][0], w[1] + S.dW[k][1]]) : S.W;
+        const z = M.map(w => w[0] * d.x[0] + w[1] * d.x[1]); const m = Math.max(...z);
+        const e = z.map(v => Math.exp(v - m)); const sum = e.reduce((a, b) => a + b);
+        for (let k = 0; k < K; k++) { const p = e[k] / sum - (k === d.y ? 1 : 0); G[k][0] += p * d.x[0]; G[k][1] += p * d.x[1]; }
+      }
+      const T = trainDW ? S.dW : S.W;
+      for (let k = 0; k < K; k++) { T[k][0] -= lr * G[k][0] / set.length; T[k][1] -= lr * G[k][1] / set.length; }
+    }
+    const acc = set => S.W ? set.filter(d => predict(d.x) === d.y).length / set.length * 100 : null;
+
+    const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+    const hexRgb = h => { h = h.replace('#', ''); const n = parseInt(h, 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; };
+    let W = 0, H = 0, SC = 1, dpr = 1;
+    const TOP = 40;   // band reserved at the top of the plot for the 'Training on…' label
+    const CY = () => TOP + (H - TOP) / 2;
+    const toPx = p => [W / 2 + p[0] * SC, CY() - p[1] * SC];
+    const toW = (x, y) => [(x - W / 2) / SC, (CY() - y) / SC];
+    function resize() {
+      dpr = window.devicePixelRatio || 1;
+      const r = cv.getBoundingClientRect(); W = r.width; H = r.height;
+      SC = Math.min(W / 2.2, (H - TOP) / 1.75);
+      cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0); gridCache = null; ringCache = null; draw();
+    }
+
+    let gridCache = null, ringCache = null;
+    function grid() {
+      if (gridCache) return gridCache;
+      const cell = 2, gw = Math.ceil(W / cell), gh = Math.ceil(H / cell), n = gw * gh;
+      const xs = new Float32Array(n), ys = new Float32Array(n), mask = new Uint8Array(n);
+      for (let j = 0; j < gh; j++) for (let i = 0; i < gw; i++) {
+        const p = toW((i + .5) * cell, (j + .5) * cell), idx = j * gw + i;
+        xs[idx] = p[0]; ys[idx] = p[1]; mask[idx] = inBall(p) ? 1 : 0;
+      }
+      return (gridCache = { cell, gw, gh, xs, ys, mask });
+    }
+    function draw() {
+      if (!W) return;
+      const cols = [0, 1, 2, 3, 4, 5].map(k => css('--k' + k));
+      const rgb = cols.map(hexRgb);
+      const C = { rule: css('--rule'), surf: css('--surface'), ink: css('--ink'), ink2: css('--ink-2'), open: css('--open'), mono: css('--f-mono') };
+      ctx.clearRect(0, 0, W, H);
+      if (S.W) {
+        const G = grid();
+        if (off.width !== G.gw || off.height !== G.gh) { off.width = G.gw; off.height = G.gh; }
+        const img = octx.createImageData(G.gw, G.gh), d = img.data;
+        const M0 = S.W, M1 = (S.phase.startsWith('lsl') && S.dW) ? S.W.map((w, k) => [w[0] + S.dW[k][0], w[1] + S.dW[k][1]]) : null;
+        for (let idx = 0, n = G.gw * G.gh; idx < n; idx++) {
+          const M = (M1 && G.mask[idx]) ? M1 : M0, x = G.xs[idx], y = G.ys[idx];
+          let best = 0, bv = M[0][0] * x + M[0][1] * y;
+          for (let k = 1; k < K; k++) { const v = M[k][0] * x + M[k][1] * y; if (v > bv) { bv = v; best = k; } }
+          const o = idx * 4, c = rgb[best];
+          d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = 58;
+        }
+        octx.putImageData(img, 0, 0);
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(off, 0, 0, G.gw * G.cell, G.gh * G.cell);
+      }
+      const o = toPx([0, 0]);
+      ctx.strokeStyle = C.rule; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(0, o[1]); ctx.lineTo(W, o[1]); ctx.moveTo(o[0], 0); ctx.lineTo(o[0], H); ctx.stroke();
+
+      // LSL support outline
+      if (S.phase.startsWith('lsl')) {
+        if (!ringCache) {
+          const rp = R * SC;
+          ringCache = document.createElement('canvas'); ringCache.width = cv.width; ringCache.height = cv.height;
+          const rc = ringCache.getContext('2d'); rc.setTransform(dpr, 0, 0, dpr, 0, 0);
+          rc.fillStyle = C.open; rc.beginPath();
+          ft.forEach(f => { const q = toPx(f.x); rc.moveTo(q[0] + rp + 1, q[1]); rc.arc(q[0], q[1], rp + 1, 0, Math.PI * 2); }); rc.fill();
+          rc.globalCompositeOperation = 'destination-out'; rc.beginPath();
+          ft.forEach(f => { const q = toPx(f.x); rc.moveTo(q[0] + rp - 1, q[1]); rc.arc(q[0], q[1], rp - 1, 0, Math.PI * 2); }); rc.fill();
+        }
+        ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(ringCache, 0, 0); ctx.restore();
+      }
+
+      // points
+      const seenFt = !S.phase.startsWith('pre');
+      document.getElementById('lg-ft').classList.toggle('hide', !seenFt);
+      const training = S.phase.startsWith('pre') ? 'pre' : (S.phase.startsWith('ft') || S.phase.startsWith('lsl')) ? 'ft' : null;
+      document.getElementById('lg-pre').classList.toggle('active', training === 'pre');
+      document.getElementById('lg-pre').classList.toggle('faded', training === 'ft');
+      document.getElementById('lg-ft').classList.toggle('active', training === 'ft');
+      const chip = document.getElementById('toy-train');
+      chip.hidden = !training;
+      if (training === 'pre') chip.innerHTML = 'Pretraining on classes 0–3 <i style="background:var(--k0)"></i><i style="background:var(--k1)"></i><i style="background:var(--k2)"></i><i style="background:var(--k3)"></i>';
+      if (training === 'ft') chip.innerHTML = 'Finetuning on classes 4–5 only <i style="background:var(--k4)"></i><i style="background:var(--k5)"></i>';
+      const pr = W < 420 ? 3 : 3.8;
+      data.forEach(d => {
+        if (d.y >= 4 && !seenFt) return;
+        const faded = training === 'ft' && d.y < 4;   // old data: not used for training in this phase
+        const q = toPx(d.x); ctx.beginPath(); ctx.arc(q[0], q[1], pr, 0, 7);
+        ctx.globalAlpha = faded ? .45 : 1;
+        ctx.fillStyle = cols[d.y]; ctx.fill(); ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(15,25,55,.45)'; ctx.stroke();
+        ctx.globalAlpha = 1;
+      });
+
+      // forgotten clusters
+      if (S.W && (S.phase.startsWith('ft') || S.phase.startsWith('lsl'))) {
+        for (let k = 0; k < 4; k++) {
+          const pts = pre.filter(d => d.y === k);
+          const a = pts.filter(d => predict(d.x) === d.y).length / pts.length;
+          if (a < .6) {
+            const q = toPx(CENT[k]);
+            ctx.save(); ctx.setLineDash([5, 4]); ctx.strokeStyle = C.ink; ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.arc(q[0], q[1], 0.22 * SC, 0, 7); ctx.stroke(); ctx.restore();
+            ctx.font = `600 12px ${C.mono}`; ctx.fillStyle = C.ink; ctx.textAlign = 'center';
+            const above = q[1] - 0.22 * SC - 6; ctx.fillText('catastrophic forgetting', q[0], above < TOP + 12 ? q[1] + 0.22 * SC + 16 : above);   // flip below if it would sit under the top label
+          }
+        }
+      }
+      ctx.textAlign = 'left';
+
+      const ap = acc(pre), af = acc(ft);
+      accPre.textContent = ap === null ? '–' : Math.round(ap) + '%';
+      const ftShown = S.W && (S.phase.startsWith('ft') || S.phase.startsWith('lsl'));
+      accFt.textContent = ftShown ? Math.round(af) + '%' : '–';
+      accPre.className = 'v' + (ap === null ? '' : ap > 95 ? ' good' : ' bad');
+      accFt.className = 'v' + (!ftShown ? '' : af > 95 ? ' good' : ' bad');
+    }
+
+    const NS = 'http://www.w3.org/2000/svg';
+    const TOTAL = 2 * STEPS;
+    const CP = { l: 38, r: 8, t: 26, b: 46, w: 280, h: 228 };
+    const cx = n => CP.l + n / TOTAL * (CP.w - CP.l - CP.r);
+    const cy = v => CP.h - CP.b - v / 100 * (CP.h - CP.t - CP.b);
+    function mk(tag, at) { const e = document.createElementNS(NS, tag); for (const k in at) e.setAttribute(k, at[k]); chart.appendChild(e); return e; }
+    function drawChart() {
+      chart.innerHTML = '';
+      [0, 50, 100].forEach(v => {
+        mk('line', { x1: CP.l, x2: CP.w - CP.r, y1: cy(v), y2: cy(v), style: 'stroke: var(--rule); stroke-width: 1' });
+        const t = mk('text', { x: CP.l - 7, y: cy(v) + 5, 'text-anchor': 'end', style: 'font: 14px var(--f-body); fill: var(--ink-2)' }); t.textContent = v;
+      });
+      // phase divider and labels
+      mk('line', { x1: cx(STEPS), x2: cx(STEPS), y1: CP.t - 18, y2: CP.h - CP.b, style: 'stroke: var(--ink-3); stroke-width: 1; stroke-dasharray: 4 3' });
+      const l1 = mk('text', { x: (cx(0) + cx(STEPS)) / 2, y: CP.t - 8, 'text-anchor': 'middle', style: 'font: 600 12.5px var(--f-body); fill: var(--ink-2)' }); l1.textContent = 'Pretrain';
+      const l2 = mk('text', { x: (cx(STEPS) + cx(TOTAL)) / 2, y: CP.t - 8, 'text-anchor': 'middle', style: 'font: 600 12.5px var(--f-body); fill: var(--ink-2)' }); l2.textContent = 'Finetune';
+      [0, STEPS, TOTAL].forEach(n => { const t = mk('text', { x: cx(n), y: CP.h - CP.b + 19, 'text-anchor': n === 0 ? 'start' : n === TOTAL ? 'end' : 'middle', style: 'font: 14px var(--f-body); fill: var(--ink-2)' }); t.textContent = n; });
+      const xl = mk('text', { x: (cx(0) + cx(TOTAL)) / 2, y: CP.h - 3, 'text-anchor': 'middle', style: 'font: 15px var(--f-body); fill: var(--ink)' }); xl.textContent = 'steps';
+      const H = S.hist; if (!H.length) return;
+      const path = (pts, key, col, w) => pts.length && mk('path', { d: pts.map((h, i) => (i ? 'L' : 'M') + cx(h.n).toFixed(1) + ' ' + cy(h[key]).toFixed(1)).join(' '), fill: 'none', style: `stroke: ${col}; stroke-width: ${w}; stroke-linejoin: round; stroke-linecap: round` });
+      const ftPts = H.filter(h => h.n >= STEPS);
+      path(H, 'pre', 'var(--k1)', ftPts.length ? 6 : 3);   // drawn wider underneath so both stay visible when they overlap
+      path(ftPts, 'ft', 'var(--k5)', 2.6);
+      const last = H[H.length - 1];
+      mk('circle', { cx: cx(last.n), cy: cy(last.pre), r: 4.5, style: 'fill: var(--k1)' });
+      if (ftPts.length) mk('circle', { cx: cx(last.n), cy: cy(last.ft), r: 4.5, style: 'fill: var(--k5)' });
+    }
+    function record(n) { S.hist.push({ n, pre: acc(pre), ft: acc(ft) }); stepEl.textContent = n + ' / ' + TOTAL + ' steps'; drawChart(); }
+
+    const LABEL = {
+      'data': 'Data: two learning phases',
+      'pre-run': 'Pretraining on classes 0–3…',
+      'ft-run': 'Finetuning with GD on classes 4–5…', 'ft': 'Finetuned with GD: global update',
+      'lsl-run': 'Finetuning with LSL on classes 4–5…', 'lsl': 'Finetuned with LSL: local update'
+    };
+    const BTN = { data: bData, ft: bGd, lsl: bLsl };
+    function setPhase(ph) {
+      S.phase = ph; stageEl.textContent = LABEL[ph];
+      const busy = ph.endsWith('-run');
+      const active = S.kind && ph !== 'data' ? S.kind : 'data';
+      Object.entries(BTN).forEach(([k, b]) => { b.disabled = busy; b.setAttribute('aria-pressed', k === active); b.classList.remove('next'); });
+      const next = { data: bGd, ft: bLsl }[ph];
+      if (next) next.classList.add('next');
+    }
+    // One run = pretraining on classes 0–3, then finetuning on classes 4–5 with GD or LSL.
+    function runSeq(kind) {
+      cancelAnimationFrame(S.anim);
+      S.kind = kind; S.W = init(); S.W0 = null; S.dW = null; S.hist = [];
+      setPhase('pre-run'); record(0);
+      const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+      let n = 0;
+      const one = () => {
+        if (n < STEPS) { step(pre, false, lrAt(n)); }
+        else {
+          if (n === STEPS) { S.W0 = S.W.map(w => w.slice()); if (kind === 'lsl') S.dW = zeros(); setPhase(kind + '-run'); }
+          step(ft, kind === 'lsl', lrAt(n - STEPS));
+        }
+        n++;
+      };
+      // piecewise-linear map from elapsed seconds to target step, across both phases
+      const knots = [[0, 0]];
+      let tAcc = 0;
+      PACE.pre.forEach(([st, sec]) => { tAcc += sec; knots.push([tAcc, st]); });
+      PACE[kind].forEach(([st, sec]) => { tAcc += sec; knots.push([tAcc, STEPS + st]); });
+      const targetAt = t => { for (let i = 1; i < knots.length; i++) { const [t1, s1] = knots[i], [t0, s0] = knots[i - 1]; if (t <= t1) return Math.floor(s0 + (s1 - s0) * (t - t0) / (t1 - t0)); } return TOTAL; };
+      const t0 = performance.now();
+      const tick = () => {
+        if (reduce) { while (n < TOTAL) { for (let i = 0; i < 10 && n < TOTAL; i++) one(); S.hist.push({ n, pre: acc(pre), ft: acc(ft) }); } S.hist.pop(); record(n); }
+        else { const target = Math.min(TOTAL, targetAt((performance.now() - t0) / 1000)); while (n < target) one(); record(n); }
+        draw();
+        if (n < TOTAL) S.anim = requestAnimationFrame(tick);
+        else { setPhase(kind); draw(); }
+      };
+      tick();
+    }
+    bData.addEventListener('click', () => { cancelAnimationFrame(S.anim); S.kind = null; S.W = null; S.W0 = null; S.dW = null; S.hist = []; stepEl.textContent = '0 / ' + TOTAL + ' steps'; drawChart(); setPhase('data'); draw(); });
+    bGd.addEventListener('click', () => runSeq('ft'));
+    bLsl.addEventListener('click', () => runSeq('lsl'));
+
+    new ResizeObserver(resize).observe(cv);
+    matchMedia('(prefers-color-scheme: dark)').addEventListener('change', draw);
+    new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    setPhase('data'); drawChart(); resize();
+  })();
+
+  /* ---------- Figure zoom ---------- */
+  const dlg = document.getElementById('zoom'), zimg = document.getElementById('zoom-img');
+  document.querySelectorAll('[data-zoom]').forEach(b => b.addEventListener('click', () => {
+    const im = b.querySelector('img'); zimg.src = im.src; zimg.alt = im.alt;
+    if (dlg.showModal) dlg.showModal();
+  }));
+  document.getElementById('zoom-close').addEventListener('click', () => dlg.close());
+  dlg.addEventListener('click', e => { if (e.target === dlg) dlg.close(); });
+
+  /* ---------- Copy BibTeX ---------- */
+  const cb = document.getElementById('copy-bib'), bib = document.getElementById('bib');
+  cb.addEventListener('click', () => {
+    const done = t => { cb.textContent = t; setTimeout(() => cb.textContent = 'Copy', 1600); };
+    const fallback = () => { const s = getSelection(), r = document.createRange(); r.selectNodeContents(bib); s.removeAllRanges(); s.addRange(r); done('Selected'); };
+    try { navigator.clipboard.writeText(bib.textContent).then(() => done('Copied'), fallback); } catch (e) { fallback(); }
+  });
+})();
+</script>
+</body>
+</html>
